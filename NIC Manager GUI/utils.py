@@ -177,7 +177,7 @@ def get_network_adapters() -> Tuple[bool, List[Dict[str, str]] | str]:
     return True, adapters
 
 # _set_adapter_state, enable_adapter, disable_adapter 保持不变
-def _set_adapter_state(adapter_name: str, state: str) -> Tuple[bool, str]:
+def _set_adapter_state_cmd(adapter_name: str, state: str) -> Tuple[bool, str]:
     """内部函数，用于启用或禁用指定的网络适配器。"""
     if state not in ["enable", "disable"]:
         return False, "无效的状态，必须是 'enable' 或 'disable'"
@@ -185,9 +185,70 @@ def _set_adapter_state(adapter_name: str, state: str) -> Tuple[bool, str]:
     success, output = _run_command(command)
     if success:
         # netsh 成功时通常没有重要输出，构建一个通用成功消息
-        return True, f"适配器 '{adapter_name}' 操作 '{state}' 可能已成功。"
+        if state == "enable":
+            return True, f"适配器 '{adapter_name}' 已启用。"
+        else:
+            return True, f"适配器 '{adapter_name}' 已禁用。"
     else:
         return False, f"操作适配器 '{adapter_name}' 失败: {output}" # output 包含来自 _run_command 的错误
+
+
+def _set_adapter_state(adapter_name: str, state: str) -> Tuple[bool, str]:
+    """
+    内部函数，用于启用或禁用指定的网络适配器 (改用 PowerShell)。
+
+    Args:
+        adapter_name (str): 要操作的适配器名称。
+        state (str): 'enable' 或 'disable'。
+
+    Returns:
+        Tuple[bool, str]: 操作结果 (True/False, 消息)。
+    """
+    if state == "enable":
+        # 使用 PowerShell Enable-NetAdapter
+        # -Name "{adapter_name}" : 指定名称，引号处理空格
+        # -Confirm:$false : 不需要交互式确认
+        ps_command = f'Enable-NetAdapter -Name "{adapter_name}" -Confirm:$false'
+        action_verb_cn = "启用"
+        action_verb_en = "enable"
+    elif state == "disable":
+        # 使用 PowerShell Disable-NetAdapter
+        ps_command = f'Disable-NetAdapter -Name "{adapter_name}" -Confirm:$false'
+        action_verb_cn = "禁用"
+        action_verb_en = "disable"
+    else:
+        return False, "无效的状态，必须是 'enable' 或 'disable'"
+
+    # 构建执行 PowerShell 命令的参数列表
+    # -NoProfile: 加快启动速度，不加载用户配置文件
+    # -ExecutionPolicy Bypass: 绕过执行策略限制 (需要管理员权限)
+    # -Command: 后面跟要执行的 PowerShell 命令字符串
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command", ps_command
+    ]
+
+    # 调用我们现有的 _run_command 函数来执行
+    success, output = _run_command(command)
+
+    # 分析 PowerShell 的执行结果
+    if success:
+        # PowerShell 命令成功执行通常没有输出或输出我们在此忽略的对象信息
+        # 但有时即使 returncode 是 0，也可能有非致命错误或警告信息在 stdout/stderr
+        # 做一个简单的检查，看输出是否包含明确的错误指示词
+        # 注意：这只是一个基本检查，更复杂的错误处理可能需要解析PS错误对象
+        error_indicators = ["error", "错误", "失败", "exception", "异常"]
+        if any(indicator in output.lower() for indicator in error_indicators):
+            # 即使返回码是0，也报告潜在问题
+             return False, f"执行 PowerShell 命令时可能出错:\n{output}\n命令: {ps_command}"
+        else:
+             return True, f"适配器 '{adapter_name}' 已成功 {action_verb_cn}。"
+    else:
+        # 如果 _run_command 报告失败 (returncode 非 0)
+        # output 包含了 PowerShell 返回的错误信息
+        return False, f"通过 PowerShell 操作适配器 '{adapter_name}' 失败: {output}" # output 已包含命令信息
 
 def enable_adapter(adapter_name: str) -> Tuple[bool, str]:
     """启用指定的网络适配器。"""
